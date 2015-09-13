@@ -92,9 +92,12 @@ void updateUtCcsLastBlock(const NTScalings& scalings, const Problem& problem,
     // IPerm is not used
     // j is actual column index and colI is permuted col index
     // size_t colI = IPerm[j];
-
+    std::cout << "Column: " << j << std::endl;
+    std::cout << "Row: " << ri[cp[j + 1] - 1] << std::endl;
+    std::cout << "Old val: " << rv[cp[j + 1] - 1] << std::endl;
     // TODO Minus before omega is easy to miss what to do
     rv[cp[j + 1] - 1] = -scalings.omegaSquare[scalingIndex++];
+    std::cout << "New val: " << rv[cp[j + 1] - 1] << std::endl;
   }
 }
 

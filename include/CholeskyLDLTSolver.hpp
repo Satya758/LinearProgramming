@@ -77,6 +77,8 @@ class CholeskyLDLTSolver {
 
     // Symbolic analysis
     _L = cholmod_l_analyze(_A, &c);
+    _L->is_ll = false;
+    _L->is_super = false;
     // computeIPerm();
 
     factorize(0);
@@ -90,10 +92,12 @@ class CholeskyLDLTSolver {
                          static_cast<SuiteSparse_long*>(_A->p),
                          static_cast<SuiteSparse_long*>(_A->i),
                          static_cast<double*>(_A->x), nullptr);
+
     // After first factor only 3X3 diagonal block is changed so we can do
     // incremental factorization
     factorize(_problem.columns + _problem.equalityRows);
   }
+
 
   DenseVector solveForRhs(const DenseVector& rhs) {
     auto cholmod_del = [&](cholmod_dense* d) {
@@ -128,6 +132,7 @@ class CholeskyLDLTSolver {
   cholmod_sparse* _A;
 
   cholmod_factor* _L;
+  cholmod_factor* _PL; // Partial factor
 
   cholmod_common c;
 

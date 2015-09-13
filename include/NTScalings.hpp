@@ -25,6 +25,8 @@ class NTScalings {
    * initialize each of them which is unnecessary so I have removed constant
    * and initializing all of them in a single for loop as shown below, catch is
    * user using this class should create it as const
+   *
+   * FIXME Looks like there are no bound checks on DenseVector be careful
    */
   NTScalings(const Problem& problem, const Point& point)
       : omega(problem.inequalityRows),

@@ -29,12 +29,21 @@ class Solver {
 
     Point currentPoint = getInitialPoint(kkt);
 
-    for (int j = 0; j < _problem.options.IRIterations; ++j) {
+    for (int j = 0; j < 1; ++j) {
       // Compute residuals
       // Check for termination conditions
       const NTScalings scalings(_problem, currentPoint);
 
       updateKktWithNewScalings(scalings, kkt);
+
+      std::cout << "kkt: " << kkt << std::endl;
+
+      _lSolver.factorizeMatrix(scalings);
+
+      DenseVector solution = findSolutionForRhs(kkt, -_problem.c, _problem.b, _problem.h);
+
+      std::cout << "First solution " << solution << std::endl;
+
     }
 
     _logger->info("Solver ended");
@@ -58,11 +67,12 @@ class Solver {
    */
   void updateKktWithNewScalings(const NTScalings& scalings,
                                 SymmetricMatrix& kkt) const {
+    size_t omegaI = 0;
     // 3X3 block diagonal, scalings matrix
     for (size_t j = _problem.columns + _problem.equalityRows; j < kkt.columns();
          ++j) {
       // TODO Minus before omega is easy to miss what to do
-      kkt(j, j) = -scalings.omegaSquare[j];
+      kkt(j, j) = -scalings.omegaSquare[omegaI++];
     }
   }
 
@@ -260,7 +270,9 @@ class Solver {
   DenseVector doIterativeRefinement(const SymmetricMatrix& kkt,
                                     const DenseVector& rhs,
                                     const DenseVector& solution) {
-    double prevError = std::nan("1");
+    std::cout << "Before IR" << solution << std::endl;
+
+        double prevError = std::nan("1");
     double errorThreshold = (1 + kkt.nonZeros()) * _problem.options.LSAcc;
 
     DenseVector newSolution = solution;

@@ -40,10 +40,10 @@ class Solver {
 
       _lSolver.factorizeMatrix(scalings);
 
-      DenseVector solution = findSolutionForRhs(kkt, -_problem.c, _problem.b, _problem.h);
+      DenseVector solution =
+          findSolutionForRhs(kkt, -_problem.c, _problem.b, _problem.h);
 
       std::cout << "First solution " << solution << std::endl;
-
     }
 
     _logger->info("Solver ended");
@@ -272,7 +272,7 @@ class Solver {
                                     const DenseVector& solution) {
     std::cout << "Before IR" << solution << std::endl;
 
-        double prevError = std::nan("1");
+    double prevError = std::nan("1");
     double errorThreshold = (1 + kkt.nonZeros()) * _problem.options.LSAcc;
 
     DenseVector newSolution = solution;

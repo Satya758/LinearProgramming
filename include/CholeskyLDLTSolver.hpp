@@ -55,6 +55,7 @@ class CholeskyLDLTSolver {
   ~CholeskyLDLTSolver() {
     cholmod_l_free_sparse(&_A, &c);
     cholmod_l_free_factor(&_L, &c);
+    cholmod_l_free_factor(&_PL, &c);
 
     cholmod_l_finish(&c);
   }
@@ -76,12 +77,23 @@ class CholeskyLDLTSolver {
     //    cholmod_l_check_sparse(_A, &c);
 
     // Symbolic analysis
-    _L = cholmod_l_analyze(_A, &c);
-    _L->is_ll = false;
-    _L->is_super = false;
+    _PL = cholmod_l_analyze(_A, &c);
+    _PL->is_ll = false;
+    _PL->is_super = false;
     // computeIPerm();
 
-    factorize(0);
+    factorize(0, _problem.columns + _problem.equalityRows, _PL);
+
+    // Clean old factor before creating new one
+    //    cholmod_l_free_factor(&_L, &c);
+    // FIXME Instead of copying we can clean _PL to be used for subsequent
+    // factorizations
+    // TODO Meanwhile move to method
+    _L = cholmod_l_copy_factor(_PL, &c);
+    factorize(_problem.columns + _problem.equalityRows, _A->nrow, _L);
+
+    cholmod_l_print_factor(_PL, "PL: ", &c);
+    cholmod_l_print_factor(_L, "L: ", &c);
   }
 
   /**
@@ -93,11 +105,13 @@ class CholeskyLDLTSolver {
                          static_cast<SuiteSparse_long*>(_A->i),
                          static_cast<double*>(_A->x), nullptr);
 
+    // Clean old factor before creating new one
+    cholmod_l_free_factor(&_L, &c);
+    _L = cholmod_l_copy_factor(_PL, &c);
     // After first factor only 3X3 diagonal block is changed so we can do
     // incremental factorization
-    factorize(_problem.columns + _problem.equalityRows);
+    factorize(_problem.columns + _problem.equalityRows, _A->nrow, _L);
   }
-
 
   DenseVector solveForRhs(const DenseVector& rhs) {
     auto cholmod_del = [&](cholmod_dense* d) {
@@ -132,14 +146,14 @@ class CholeskyLDLTSolver {
   cholmod_sparse* _A;
 
   cholmod_factor* _L;
-  cholmod_factor* _PL; // Partial factor
+  cholmod_factor* _PL;  // Partial factor
 
   cholmod_common c;
 
   /**
    * FIXME use beta[0] instead of adding delta explicitly
    */
-  void factorize(size_t startingIndex) {
+  void factorize(size_t startingIndex, size_t rows, cholmod_factor* _FL) {
     // Natural ordering is used
     // permuteMatrix();
 
@@ -147,7 +161,9 @@ class CholeskyLDLTSolver {
     beta[0] = 0;
     beta[1] = 0;
 
-    cholmod_l_rowfac(_A, nullptr, beta, startingIndex, _A->nrow, _L, &c);
+    // endIndex is not actual index but number of rows, rows - 1 is done inside
+    // to get index, read the doc!!!
+    cholmod_l_rowfac(_A, nullptr, beta, startingIndex, rows, _FL, &c);
   }
 
   /**

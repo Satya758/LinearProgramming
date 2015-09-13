@@ -32,5 +32,23 @@ class Point {
   double kappa;
 };
 
+/**
+ *
+ */
+std::ostream& operator<<(std::ostream& out, const Point& point) {
+  using namespace std;
+
+  out << endl << "##################### Point Start" << endl;
+  out << "Primal Variable x:" << endl << point.x << endl;
+  out << "Primal Variable s:" << endl << point.s << endl;
+  out << "Dual Variable y:" << endl << point.y << endl;
+  out << "Dual Variable z:" << endl << point.z << endl;
+  out << "Homogenizing Variable kappa: " << endl << point.kappa << endl;
+  out << "Homogenizing Variable tau: " << endl << point.tau << endl;
+  out << "##################### Point End" << endl;
+
+  return out;
+}
+
 }  // lp
 #endif  // POINT_HPP

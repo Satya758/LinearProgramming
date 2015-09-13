@@ -10,6 +10,9 @@
  * These are helper functions used by linear solvers to convert blaze matrices
  * to CCS
  * (Compressed Column Storage) or CRS and vectors to plain arrays.
+ *
+ * FIXME Move to linear solver as free functions if another file feels is too
+ *much
  */
 
 namespace lp {
@@ -29,8 +32,8 @@ namespace lp {
  * Creates copy of blaze matrix.
  */
 template <typename ColumnPointer, typename RowIndex, typename RowValue>
-void createUTCCSMatrix(const SymmetricMatrix& bMatrix, ColumnPointer* const cp,
-                       RowIndex* ri, RowValue* rv) {
+void createUtCcsMatrix(const SymmetricMatrix& bMatrix, ColumnPointer* const cp,
+                       RowIndex* const ri, RowValue* const rv) {
   // Nature of column pointer, always starts with 0 and ends with nnz
   cp[0] = 0;
   size_t columnPtr = 0;
@@ -46,8 +49,11 @@ void createUTCCSMatrix(const SymmetricMatrix& bMatrix, ColumnPointer* const cp,
 
       ++rowIndex;
 
-      // If row index goes beyond diagonal element stop the loop, as we are only
-      // looking at upper triangular matrix
+      // If row index is equal or beyond diagonal element stop the loop, as we
+      // are only
+      // looking at upper triangular matrix.
+      // As diagonal element is guaranteed to be present equality check is
+      // enough though
       if (colIter->index() >= i) {
         break;
       }
@@ -57,15 +63,57 @@ void createUTCCSMatrix(const SymmetricMatrix& bMatrix, ColumnPointer* const cp,
 }
 
 /**
+ * As we have only upper triangle stored in CCS format, we are sure that last
+ * element in each column is diagonal element.
+ * So Diagonal element can be accessed by rv[cp[i+1] - 1] of column i and row i,
+ * this is because of being diagonal element last
+ * Above condition is not true for Second order cones
+ *
+ * Only rowValue array is changed
+ * Only 3X3 diagonal block is changed (Which is already permuted)
+ *
+ * TODO This free function diviated from Blaze to CCS to Cholmod (Due to use of
+ *permutation matrix), so question is does this method belong here or in
+ *Choleksy solver?
+ */
+template <typename ColumnPointer, typename RowIndex, typename RowValue>
+void updateUtCcsLastBlock(const NTScalings& scalings, const Problem& problem,
+                          const ColumnPointer* const cp,
+                          const RowIndex* const ri, RowValue* const rv,
+                          const SuiteSparse_long* const IPerm) {
+  size_t colIndex = problem.columns + problem.equalityRows;
+  size_t columns =
+      problem.columns + problem.equalityRows + problem.inequalityRows;
+
+  size_t scalingIndex = 0;
+  // 3X3 block diagonal, scalings matrix
+  for (size_t j = colIndex; j < columns; ++j) {
+    // TODO Ordering is not done in favour of incremental factorization, so
+    // IPerm is not used
+    // j is actual column index and colI is permuted col index
+    // size_t colI = IPerm[j];
+
+    // TODO Minus before omega is easy to miss what to do
+    rv[cp[j + 1] - 1] = -scalings.omegaSquare[scalingIndex++];
+  }
+}
+
+/**
  * Returns nonzeros in upper triangle of given symmetric matrix
  */
-size_t getSymmetricUtNonZeros(const SymmetricMatrix& bMatrix) {
+size_t getSymmetricUtNnz(const SymmetricMatrix& bMatrix) {
   // As its guaranteed that there are diagonal elements, subtract rows/columns
   // (which is equal to diagonal elements) from overall nnz
   size_t strictlyUpperNnz = (bMatrix.nonZeros() - bMatrix.rows()) / 2;
   // Add back diagonal elements to get upper triangle nnz
   return strictlyUpperNnz + bMatrix.rows();
 }
+
+/**
+ * Lifetime of pointer is maintained by blaze, keep that in mind, as we are in
+ * scope of solver, pointer do not go out of scope
+ */
+const double* getDenseVector(const DenseVector& bVec) { return bVec.data(); }
 
 }  // lp
 #endif  // CONVERTFROMBLAZE_HPP

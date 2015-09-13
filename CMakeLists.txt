@@ -48,7 +48,7 @@ find_library(LP_PARSER parser PATHS "/home/satya/myLibs/lpParser/lib")
 # Idea is to use this as linked library rather than header does it make sense!! lets see
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
-add_executable(linearprogramming main.cpp include/Point.hpp include/Residual.hpp include/Solver.hpp include/CholeskyLDLTSolver.hpp include/ConvertFromBlaze.hpp)
+add_executable(linearprogramming main.cpp include/Point.hpp include/Residual.hpp include/Solver.hpp include/CholeskyLDLTSolver.hpp include/ConvertFromBlaze.hpp include/NTScalings.hpp)
 
 target_link_libraries(${PROJECT_NAME}
 		      ${BOOST_SYSTEM} ${BOOST_THREAD} ${BOOST_FS}

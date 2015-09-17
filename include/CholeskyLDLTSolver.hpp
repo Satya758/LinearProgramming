@@ -82,11 +82,6 @@ class CholeskyLDLTSolver {
     _PL->is_ll = false;
     _PL->is_super = false;
 
-    // Natural ordering is used
-    // normalizePerm();
-    // computeIPerm();
-    // permuteMatrix();
-
     factorize(0, _problem.columns + _problem.equalityRows, _PL);
 
     // Clean old factor before creating new one
@@ -166,72 +161,6 @@ class CholeskyLDLTSolver {
     // endIndex is not actual index but number of rows, rows - 1 is done inside
     // to get index, read the doc!!!
     cholmod_l_rowfac(_A, nullptr, beta, startingIndex, rows, _FL, &c);
-  }
-
-  /**
-   * As whole _A is not copied again we have to permute only once!!
-   * Natural ordering is used, so no use of this method
-   */
-  void permuteMatrix() {
-    // Temporary holder
-    // though stype is of no use for B matrix, given as input in this case to
-    // make intention more clear
-    cholmod_sparse* B = cholmod_l_allocate_sparse(
-        _A->nrow, _A->ncol, _A->nzmax, true, true, -1, CHOLMOD_REAL, &c);
-    // 1 in second parameter means normal array transpose (look into cholmod
-    // doc)
-    cholmod_l_transpose_sym(_A, 1, static_cast<SuiteSparse_long*>(_PL->Perm), B,
-                            &c);
-    // transpose again to get upper triangular matrix
-    cholmod_l_transpose_sym(B, 1, nullptr, _A, &c);
-
-    // Free B matrix, we can use unique_ptr with custom deleter, but method is
-    // so small its ok
-    cholmod_l_free_sparse(&B, &c);
-  }
-
-  /**
-   * Compute Inverse permutation vector to update scalings
-   *
-   * Used to find permuted col/row from unpermuted col/row index
-   *
-   * Natural order is used, so no permutation required
-   */
-  void computeIPerm() {
-    SuiteSparse_long* Perm = static_cast<SuiteSparse_long*>(_PL->Perm);
-
-    // allocate memory
-    _PL->IPerm = cholmod_l_malloc(_PL->n, sizeof(SuiteSparse_long), &c);
-    SuiteSparse_long* IPerm = static_cast<SuiteSparse_long*>(_PL->IPerm);
-
-    if (!IPerm) {
-      // FIXME Error, raise exception, check Common.status for actual reason
-      // Maybe out of memory
-    }
-
-    for (size_t j = 0; j < _PL->n; ++j) {
-      IPerm[Perm[j]] = j;
-    }
-  }
-
-  /**
-   * This is totally experimental, I have not that this works!!!
-   * Change permutation matrix so that last block is unchanged, to support
-   *incremental factorization
-   *
-   * Partial ordering (This does not make sense as it can worsen the sparsity
-   *pattern)
-   */
-  void normalizePerm() {
-    SuiteSparse_long* Perm = static_cast<SuiteSparse_long*>(_PL->Perm);
-
-    for (size_t j = 0; j < _PL->n; ++j) {
-      // Reverts changes to last 3X3 block
-      if (static_cast<size_t>(Perm[j]) >=
-          _problem.columns + _problem.equalityRows) {
-        std::swap(Perm[j], Perm[Perm[j]]);
-      }
-    }
   }
 
   /**
@@ -322,7 +251,8 @@ class CholeskyLDLTSolver {
   template <typename ColumnPointer, typename RowIndex, typename RowValue>
   void updateKktUtCcs3X3Block(const DenseVector& omegaSquare,
                               const ColumnPointer* const cp,
-                              const RowIndex* const ri, RowValue* const rv) {
+                              const RowIndex* const ri,
+                              RowValue* const rv) const {
     size_t colIndex = _problem.columns + _problem.equalityRows;
     size_t columns =
         _problem.columns + _problem.equalityRows + _problem.inequalityRows;
@@ -342,7 +272,9 @@ class CholeskyLDLTSolver {
    * Lifetime of pointer is maintained by blaze, keep that in mind, as we are in
    * scope of solver, pointer do not go out of scope
    */
-  const double* getDenseVector(const DenseVector& bVec) { return bVec.data(); }
+  const double* getDenseVector(const DenseVector& bVec) const {
+    return bVec.data();
+  }
 };
 
 }  // lp

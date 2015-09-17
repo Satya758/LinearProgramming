@@ -10,8 +10,6 @@ using namespace std;
  *
  */
 int main(int argc, char **argv) {
-  std::cout << "Hello, world!" << std::endl;
-
   lpp::Parser parser("/home/satya/LPProblems/beer.lp", true);
 
   lpp::Problem parserProblem = parser.getBlazeProblem();

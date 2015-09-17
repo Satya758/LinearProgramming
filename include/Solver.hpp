@@ -9,10 +9,10 @@
 
 #include "Problem.hpp"
 #include "Point.hpp"
-#include "LinearAlgebraUtil.hpp"
 #include "NTScalings.hpp"
 #include "KKTUtil.hpp"
 #include "Residuals.hpp"
+#include "BlazeUtil.hpp"
 
 namespace lp {
 
@@ -28,6 +28,10 @@ class Solver {
   void solve() {
     _logger->info("Solver started");
 
+    const double rxNorm = std::max(1.0, blaze::length(_problem.c));
+    const double ryNorm = std::max(1.0, blaze::length(_problem.b));
+    const double rzNorm = std::max(1.0, blaze::length(_problem.h));
+
     // Initial omegaSquare
     // Initialize with negative one
     DenseVector initialOmegaSquare(_problem.inequalityRows, -1);
@@ -35,16 +39,29 @@ class Solver {
     Point currentPoint = getInitialPoint(initialOmegaSquare);
 
     for (int j = 0; j < 1; ++j) {
+      const Residuals residuals(_problem, currentPoint, rxNorm, ryNorm, rzNorm);
       // Compute residuals
       // Check for termination conditions
       const NTScalings scalings(_problem, currentPoint);
 
       _lSolver.factorizeMatrix(scalings.omegaSquare);
 
-      DenseVector solution = findSolutionForRhs(
-          scalings.omegaSquare, -_problem.c, _problem.b, _problem.h);
+      DenseVector ds1 = findSolutionForRhs(scalings.omegaSquare, -_problem.c,
+                                           _problem.b, _problem.h);
 
-      std::cout << "First solution " << solution << std::endl;
+      const SplitVector splitDs1(_problem, ds1);
+
+      // Common to compute both affine and combine direction, computed in
+      // affineDirection
+      const double tauDenominator = currentPoint.kappa / currentPoint.tau -
+                                    blaze::trans(_problem.c) * splitDs1.dx -
+                                    blaze::trans(_problem.b) * splitDs1.dy -
+                                    blaze::trans(_problem.h) * splitDs1.dz;
+
+      Point affinePoint = getAffineDirection(currentPoint, residuals, scalings,
+                                             splitDs1, tauDenominator);
+
+      std::cout << affinePoint << std::endl;
     }
 
     _logger->info("Solver ended");
@@ -202,9 +219,10 @@ class Solver {
     DenseVector prevSolution;
 
     for (int j = 0; j < _problem.options.IRIterations; ++j) {
-      Residuals residuals(_problem, rhs, newSolution, omegaSquare);
+      const ResidualsKkt residuals(_problem, rhs, newSolution, omegaSquare);
 
-      double errorNorm = normInf(residuals.x, residuals.y, residuals.z);
+      double errorNorm =
+          normInf(residuals.kktX, residuals.kktY, residuals.kktZ);
 
       _logger->info("Error norm: {}, during iteration: {}", errorNorm, j);
 
@@ -224,11 +242,43 @@ class Solver {
       prevError = errorNorm;
       prevSolution = newSolution;
       newSolution = newSolution +
-                    _lSolver.solveForRhs(
-                        createRHS(residuals.x, residuals.y, residuals.z));
+                    _lSolver.solveForRhs(createRHS(
+                        residuals.kktX, residuals.kktY, residuals.kktZ));
     }
 
     return newSolution;
+  }
+
+  Point getAffineDirection(const Point& currentPoint,
+                           const Residuals& residuals,
+                           const NTScalings& scalings, const SplitVector& ds1,
+                           const double& tauDenominator) {
+    DenseVector ds2 =
+        findSolutionForRhs(scalings.omegaSquare, residuals.rx, residuals.ry,
+                           -residuals.rz + currentPoint.s);
+
+    SplitVector splitDs2(_problem, ds2);
+
+    Point affinePoint(_problem);
+
+    affinePoint.tau = (residuals.rTau - currentPoint.kappa +
+                       blaze::trans(_problem.c) * splitDs2.dx +
+                       blaze::trans(_problem.b) * splitDs2.dy +
+                       blaze::trans(_problem.h) * splitDs2.dz) /
+                      tauDenominator;
+
+    affinePoint.x = ds1.dx + affinePoint.tau * splitDs2.dx;
+    affinePoint.y = ds1.dy + affinePoint.tau * splitDs2.dy;
+    affinePoint.z = ds1.dz + affinePoint.tau * splitDs2.dz;
+
+    // deltaS = -W(lambda\ lambda o lambda + W*deletaZ )
+    // -W^2 as we have added negative in scalings computation
+    affinePoint.s = currentPoint.s - scalings.omegaSquare * affinePoint.z;
+
+    affinePoint.kappa =
+        -currentPoint.kappa * (1 + affinePoint.tau / currentPoint.tau);
+
+    return affinePoint;
   }
 };
 

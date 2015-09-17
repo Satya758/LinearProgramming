@@ -6,6 +6,7 @@
 #define LINEARPROGRAMMING_RESIDUAL_HPP
 
 #include "Problem.hpp"
+#include "BlazeUtil.hpp"
 
 namespace lp {
 
@@ -113,12 +114,9 @@ class ResidualsKkt {
   const DenseVector& _solution;
   const DenseVector& _omegaSquare;
   const bool _withStaticRegularization;
-  const DenseSubvector _rhsX;
-  const DenseSubvector _rhsY;
-  const DenseSubvector _rhsZ;
-  const DenseSubvector _solX;
-  const DenseSubvector _solY;
-  const DenseSubvector _solZ;
+  // sv means subvector
+  const SplitVector _svRhs;
+  const SplitVector _svSol;
 
   /**
    * rhsX -(0 or staticDelta)*solX - A'*solY - G'*solZ
@@ -126,11 +124,11 @@ class ResidualsKkt {
   DenseVector getKktRx() const {
     DenseVector rX;
 
-    rX = _rhsX - blaze::trans(_problem.A) * _solY -
-         blaze::trans(_problem.G) * _solZ;
+    rX = _svRhs.x - blaze::trans(_problem.A) * _svSol.y -
+         blaze::trans(_problem.G) * _svSol.z;
 
     if (_withStaticRegularization) {
-      rX -= _problem.options.staticDelta * _solX;
+      rX -= _problem.options.staticDelta * _svSol.x;
     }
 
     return rX;
@@ -142,10 +140,10 @@ class ResidualsKkt {
   DenseVector getKktRy() const {
     DenseVector rY;
 
-    rY = _rhsY - _problem.A * _solX;
+    rY = _svRhs.y - _problem.A * _svSol.x;
 
     if (_withStaticRegularization) {
-      rY += _problem.options.staticDelta * _solY;
+      rY += _problem.options.staticDelta * _svSol.y;
     }
 
     return rY;
@@ -158,16 +156,9 @@ class ResidualsKkt {
   DenseVector getKktRz() const {
     DenseVector rZ;
 
-    rZ = _rhsZ - _problem.G * _solX - _omegaSquare * _solZ;
+    rZ = _svRhs.z - _problem.G * _svSol.x - _omegaSquare * _svSol.z;
 
     return rZ;
-  }
-
-  DenseSubvector getSubvector(const DenseVector& vec, const size_t startIndex,
-                              const size_t size) const {
-    DenseSubvector subvector = blaze::subvector(vec, startIndex, size);
-
-    return subvector;
   }
 
  public:
@@ -184,14 +175,8 @@ class ResidualsKkt {
         _solution(solution),
         _omegaSquare(omegaSquare),
         _withStaticRegularization(withStaticRegularization),
-        _rhsX(getSubvector(_rhs, 0UL, _problem.columns)),
-        _rhsY(getSubvector(_rhs, _problem.columns, _problem.equalityRows)),
-        _rhsZ(getSubvector(_rhs, _problem.columns + _problem.equalityRows,
-                           _problem.inequalityRows)),
-        _solX(getSubvector(_solution, 0UL, _problem.columns)),
-        _solY(getSubvector(_solution, _problem.columns, _problem.equalityRows)),
-        _solZ(getSubvector(_solution, _problem.columns + _problem.equalityRows,
-                           _problem.inequalityRows)),
+        _svRhs(_problem, _rhs),
+        _svSol(_problem, _solution),
         kktX(getKktRx()),
         kktY(getKktRy()),
         kktZ(getKktRz()) {}

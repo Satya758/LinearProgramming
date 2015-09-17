@@ -54,9 +54,9 @@ class Solver {
       // Common to compute both affine and combine direction, computed in
       // affineDirection
       const double tauDenominator = currentPoint.kappa / currentPoint.tau -
-                                    blaze::trans(_problem.c) * splitDs1.dx -
-                                    blaze::trans(_problem.b) * splitDs1.dy -
-                                    blaze::trans(_problem.h) * splitDs1.dz;
+                                    blaze::trans(_problem.c) * splitDs1.x -
+                                    blaze::trans(_problem.b) * splitDs1.y -
+                                    blaze::trans(_problem.h) * splitDs1.z;
 
       Point affinePoint = getAffineDirection(currentPoint, residuals, scalings,
                                              splitDs1, tauDenominator);
@@ -176,6 +176,7 @@ class Solver {
 
   /**
    * FB, SB, TB means first block, second block, third block
+   * TODO Use SplitVector, but rhs created here should not be constant think...
    */
   template <typename FB, typename SB, typename TB>
   DenseVector createRHS(const FB& fb, const SB& sb, const TB& tb) const {
@@ -262,14 +263,14 @@ class Solver {
     Point affinePoint(_problem);
 
     affinePoint.tau = (residuals.rTau - currentPoint.kappa +
-                       blaze::trans(_problem.c) * splitDs2.dx +
-                       blaze::trans(_problem.b) * splitDs2.dy +
-                       blaze::trans(_problem.h) * splitDs2.dz) /
+                       blaze::trans(_problem.c) * splitDs2.x +
+                       blaze::trans(_problem.b) * splitDs2.y +
+                       blaze::trans(_problem.h) * splitDs2.z) /
                       tauDenominator;
 
-    affinePoint.x = ds1.dx + affinePoint.tau * splitDs2.dx;
-    affinePoint.y = ds1.dy + affinePoint.tau * splitDs2.dy;
-    affinePoint.z = ds1.dz + affinePoint.tau * splitDs2.dz;
+    affinePoint.x = ds1.x + affinePoint.tau * splitDs2.x;
+    affinePoint.y = ds1.y + affinePoint.tau * splitDs2.y;
+    affinePoint.z = ds1.z + affinePoint.tau * splitDs2.z;
 
     // deltaS = -W(lambda\ lambda o lambda + W*deletaZ )
     // -W^2 as we have added negative in scalings computation

@@ -11,15 +11,15 @@ namespace lp {
 
 class SplitVector {
  public:
-  const DenseSubvector dx;
-  const DenseSubvector dy;
-  const DenseSubvector dz;
+  const DenseSubvector x;
+  const DenseSubvector y;
+  const DenseSubvector z;
 
   SplitVector(const Problem& problem, const DenseVector& vec)
-      : dx(blaze::subvector(vec, 0UL, problem.columns)),
-        dy(blaze::subvector(vec, problem.columns, problem.equalityRows)),
-        dz(blaze::subvector(vec, problem.columns + problem.equalityRows,
-                            problem.inequalityRows)) {}
+      : x(blaze::subvector(vec, 0UL, problem.columns)),
+        y(blaze::subvector(vec, problem.columns, problem.equalityRows)),
+        z(blaze::subvector(vec, problem.columns + problem.equalityRows,
+                           problem.inequalityRows)) {}
 };
 
 double normInf(const DenseVector& bVec) {

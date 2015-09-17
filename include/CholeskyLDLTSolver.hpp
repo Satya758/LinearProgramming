@@ -9,7 +9,7 @@
 
 #include "Problem.hpp"
 #include "NTScalings.hpp"
-#include "ConvertFromBlaze.hpp"
+#include "KKTUtil.hpp"
 
 namespace lp {
 
@@ -26,7 +26,8 @@ class CholeskyLDLTSolver {
    *non-zero pattern would not vary for this algorithm.
    * Uses CHOLMOD, incremental factorization
    */
-  CholeskyLDLTSolver(const Problem& problem) : _problem(problem) {
+  CholeskyLDLTSolver(const Problem& problem, const KKTUtil& kktUtil)
+      : _problem(problem), _kktUtil(kktUtil) {
     cholmod_l_start(&c);
 
     // TODO For now its just AMD, have to try out metis and others as we have
@@ -40,6 +41,7 @@ class CholeskyLDLTSolver {
     // factorization
     c.method[0].ordering = CHOLMOD_NATURAL;
     c.postorder = false;
+    // c.method[0].ordering = CHOLMOD_AMD;
 
     c.itype = CHOLMOD_LONG;
     c.dtype = CHOLMOD_DOUBLE;
@@ -49,7 +51,7 @@ class CholeskyLDLTSolver {
 
     // TODO Remove after testing
     // Print warning messages
-    c.print = 5;
+    c.print = 3;
   }
 
   ~CholeskyLDLTSolver() {
@@ -63,24 +65,27 @@ class CholeskyLDLTSolver {
   /**
    * As this is first time this is complete factorization with symbolic analysis
    */
-  void factorizeInitialMatrix(const SymmetricMatrix& kkt) {
+  void factorizeInitialMatrix(const DenseVector& omegaSquare) {
     // A is symmetric matrix, 6th parameter indicates that A is symmetric
-    _A = cholmod_l_allocate_sparse(kkt.rows(), kkt.columns(),
-                                   getSymmetricUtNnz(kkt), true, true, 1,
-                                   CHOLMOD_REAL, &c);
+    _A = cholmod_l_allocate_sparse(_kktUtil.size, _kktUtil.size, _kktUtil.utNnz,
+                                   true, true, 1, CHOLMOD_REAL, &c);
 
-    createUtCcsMatrix(kkt, static_cast<SuiteSparse_long*>(_A->p),
-                      static_cast<SuiteSparse_long*>(_A->i),
-                      static_cast<double*>(_A->x));
+    createInitialKktUtCcsMatrix(
+        omegaSquare, static_cast<SuiteSparse_long*>(_A->p),
+        static_cast<SuiteSparse_long*>(_A->i), static_cast<double*>(_A->x));
 
     // TODO Check if created matrix is good, remove it later after testing
-    //    cholmod_l_check_sparse(_A, &c);
+    cholmod_l_print_sparse(_A, "A", &c);
 
     // Symbolic analysis
     _PL = cholmod_l_analyze(_A, &c);
     _PL->is_ll = false;
     _PL->is_super = false;
+
+    // Natural ordering is used
+    // normalizePerm();
     // computeIPerm();
+    // permuteMatrix();
 
     factorize(0, _problem.columns + _problem.equalityRows, _PL);
 
@@ -99,11 +104,10 @@ class CholeskyLDLTSolver {
   /**
    * Incremental factorization
    */
-  void factorizeMatrix(const NTScalings& scalings) {
-    updateUtCcsLastBlock(scalings, _problem,
-                         static_cast<SuiteSparse_long*>(_A->p),
-                         static_cast<SuiteSparse_long*>(_A->i),
-                         static_cast<double*>(_A->x), nullptr);
+  void factorizeMatrix(const DenseVector& omegaSquare) {
+    updateKktUtCcs3X3Block(omegaSquare, static_cast<SuiteSparse_long*>(_A->p),
+                           static_cast<SuiteSparse_long*>(_A->i),
+                           static_cast<double*>(_A->x));
 
     // Clean old factor before creating new one
     cholmod_l_free_factor(&_L, &c);
@@ -140,6 +144,7 @@ class CholeskyLDLTSolver {
 
  private:
   const Problem& _problem;
+  const KKTUtil& _kktUtil;
 
   // Copy contents of blaze matrix into cholmod sparse as blaze structures are
   // not incompatible with cholmod
@@ -154,9 +159,6 @@ class CholeskyLDLTSolver {
    * FIXME use beta[0] instead of adding delta explicitly
    */
   void factorize(size_t startingIndex, size_t rows, cholmod_factor* _FL) {
-    // Natural ordering is used
-    // permuteMatrix();
-
     double beta[2];
     beta[0] = 0;
     beta[1] = 0;
@@ -178,7 +180,7 @@ class CholeskyLDLTSolver {
         _A->nrow, _A->ncol, _A->nzmax, true, true, -1, CHOLMOD_REAL, &c);
     // 1 in second parameter means normal array transpose (look into cholmod
     // doc)
-    cholmod_l_transpose_sym(_A, 1, static_cast<SuiteSparse_long*>(_L->Perm), B,
+    cholmod_l_transpose_sym(_A, 1, static_cast<SuiteSparse_long*>(_PL->Perm), B,
                             &c);
     // transpose again to get upper triangular matrix
     cholmod_l_transpose_sym(B, 1, nullptr, _A, &c);
@@ -196,21 +198,151 @@ class CholeskyLDLTSolver {
    * Natural order is used, so no permutation required
    */
   void computeIPerm() {
-    SuiteSparse_long* Perm = static_cast<SuiteSparse_long*>(_L->Perm);
+    SuiteSparse_long* Perm = static_cast<SuiteSparse_long*>(_PL->Perm);
 
     // allocate memory
-    _L->IPerm = cholmod_l_malloc(_L->n, sizeof(SuiteSparse_long), &c);
-    SuiteSparse_long* IPerm = static_cast<SuiteSparse_long*>(_L->IPerm);
+    _PL->IPerm = cholmod_l_malloc(_PL->n, sizeof(SuiteSparse_long), &c);
+    SuiteSparse_long* IPerm = static_cast<SuiteSparse_long*>(_PL->IPerm);
 
     if (!IPerm) {
       // FIXME Error, raise exception, check Common.status for actual reason
       // Maybe out of memory
     }
 
-    for (size_t j = 0; j < _L->n; ++j) {
+    for (size_t j = 0; j < _PL->n; ++j) {
       IPerm[Perm[j]] = j;
     }
   }
+
+  /**
+   * This is totally experimental, I have not that this works!!!
+   * Change permutation matrix so that last block is unchanged, to support
+   *incremental factorization
+   *
+   * Partial ordering (This does not make sense as it can worsen the sparsity
+   *pattern)
+   */
+  void normalizePerm() {
+    SuiteSparse_long* Perm = static_cast<SuiteSparse_long*>(_PL->Perm);
+
+    for (size_t j = 0; j < _PL->n; ++j) {
+      // Reverts changes to last 3X3 block
+      if (static_cast<size_t>(Perm[j]) >=
+          _problem.columns + _problem.equalityRows) {
+        std::swap(Perm[j], Perm[Perm[j]]);
+      }
+    }
+  }
+
+  /**
+   * Initial KKT Matrix, only upper triangle is filled to create Colum
+   *compressed storage (CCS) sparse matrix
+   *
+   *  [ d   A'  G']
+   *  [ A  -d   0 ]
+   *  [ G   0  -I ]
+   *
+   * CCS arrays are allocated
+   */
+  template <typename ColumnPointer, typename RowIndex, typename RowValue>
+  void createInitialKktUtCcsMatrix(const DenseVector& omegaSquare,
+                                   ColumnPointer* const cp, RowIndex* const ri,
+                                   RowValue* const rv) {
+    // Nature of column pointer, always starts with 0 and ends with nnz
+    cp[0] = 0;
+    size_t columnPtr = 0;
+
+    const SparseMatrix& AT = blaze::trans(_problem.A);
+    const SparseMatrix& GT = blaze::trans(_problem.G);
+
+    // Fill 1X1 diagonal block
+    for (size_t j = 0; j < _problem.columns; ++j) {
+      // As its first diagonal both index and rowIndex are same
+      ri[j] = j;
+      rv[j] = _problem.options.staticDelta;
+
+      cp[j + 1] = ++columnPtr;
+    }
+
+    // As 1X1 diagonal which has columns entries is already filled, we start
+    // next index from here
+    size_t rowIndex = _problem.columns;
+    // Fill 1X2, half of 2X2 block
+    // Blaze Sparse matrix is CCS format so accessing columns is faster
+    for (size_t k = 0; k < AT.columns(); ++k) {
+      for (SparseMatrix::ConstIterator colIter = AT.cbegin(k);
+           colIter != AT.cend(k); ++colIter) {
+        ri[rowIndex] = colIter->index();
+        rv[rowIndex++] = colIter->value();
+
+        ++columnPtr;
+      }
+
+      // Add diagonal -delta
+      ri[rowIndex] = k + _problem.columns;
+      rv[rowIndex++] = -_problem.options.staticDelta;
+
+      ++columnPtr;
+
+      cp[_problem.columns + k + 1] = columnPtr;
+    }
+
+    // Fill 1X3 and half of 3X3 block
+    for (size_t k = 0; k < GT.columns(); ++k) {
+      for (SparseMatrix::ConstIterator colIter = GT.cbegin(k);
+           colIter != GT.cend(k); ++colIter) {
+        ri[rowIndex] = colIter->index();
+        rv[rowIndex++] = colIter->value();
+
+        ++columnPtr;
+      }
+
+      // Add diagonal omegaSquare at 3X3 block
+      ri[rowIndex] = k + _problem.columns + _problem.equalityRows;
+      rv[rowIndex++] = omegaSquare[k];
+
+      ++columnPtr;
+
+      cp[_problem.columns + _problem.equalityRows + k + 1] = columnPtr;
+    }
+  }
+
+  /**
+   * As we have only upper triangle stored in CCS format, we are sure that last
+   * element in each column is diagonal element.
+   * So Diagonal element can be accessed by rv[cp[i+1] - 1] of column i and row
+   *i,
+   * this is because of being diagonal element last
+   * Above condition is not true for Second order cones
+   *
+   * Only rowValue array is changed
+   * Only 3X3 diagonal block is changed
+   *
+   */
+  template <typename ColumnPointer, typename RowIndex, typename RowValue>
+  void updateKktUtCcs3X3Block(const DenseVector& omegaSquare,
+                              const ColumnPointer* const cp,
+                              const RowIndex* const ri, RowValue* const rv) {
+    size_t colIndex = _problem.columns + _problem.equalityRows;
+    size_t columns =
+        _problem.columns + _problem.equalityRows + _problem.inequalityRows;
+
+    size_t scalingIndex = 0;
+    // 3X3 block diagonal, scalings matrix
+    for (size_t j = colIndex; j < columns; ++j) {
+      // TODO Ordering is not done in favour of incremental factorization, so
+      // IPerm is not used
+      // j is actual column index and colI is permuted col index
+      // size_t colI = IPerm[j];
+      rv[cp[j + 1] - 1] = omegaSquare[scalingIndex++];
+    }
+  }
+
+  /**
+   * Lifetime of pointer is maintained by blaze, keep that in mind, as we are in
+   * scope of solver, pointer do not go out of scope
+   */
+  const double* getDenseVector(const DenseVector& bVec) { return bVec.data(); }
 };
 
 }  // lp

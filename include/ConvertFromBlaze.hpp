@@ -30,10 +30,16 @@ namespace lp {
  * ColumnPointer and RowIndex are array of ints and RowValue is array of double
  *
  * Creates copy of blaze matrix.
+ *
+ * Initial KKT Matrix
+ *  [ d   A'  G']
+ *  [ A  -d   0 ]
+ *  [ G   0  -I ]
  */
 template <typename ColumnPointer, typename RowIndex, typename RowValue>
-void createUtCcsMatrix(const SymmetricMatrix& bMatrix, ColumnPointer* const cp,
-                       RowIndex* const ri, RowValue* const rv) {
+void createUtCcsMatrix(const Problem& problem, const DenseVector& omegaSquare,
+                       ColumnPointer* const cp, RowIndex* const ri,
+                       RowValue* const rv) {
   // Nature of column pointer, always starts with 0 and ends with nnz
   cp[0] = 0;
   size_t columnPtr = 0;
@@ -92,24 +98,9 @@ void updateUtCcsLastBlock(const NTScalings& scalings, const Problem& problem,
     // IPerm is not used
     // j is actual column index and colI is permuted col index
     // size_t colI = IPerm[j];
-    std::cout << "Column: " << j << std::endl;
-    std::cout << "Row: " << ri[cp[j + 1] - 1] << std::endl;
-    std::cout << "Old val: " << rv[cp[j + 1] - 1] << std::endl;
     // TODO Minus before omega is easy to miss what to do
     rv[cp[j + 1] - 1] = -scalings.omegaSquare[scalingIndex++];
-    std::cout << "New val: " << rv[cp[j + 1] - 1] << std::endl;
   }
-}
-
-/**
- * Returns nonzeros in upper triangle of given symmetric matrix
- */
-size_t getSymmetricUtNnz(const SymmetricMatrix& bMatrix) {
-  // As its guaranteed that there are diagonal elements, subtract rows/columns
-  // (which is equal to diagonal elements) from overall nnz
-  size_t strictlyUpperNnz = (bMatrix.nonZeros() - bMatrix.rows()) / 2;
-  // Add back diagonal elements to get upper triangle nnz
-  return strictlyUpperNnz + bMatrix.rows();
 }
 
 /**

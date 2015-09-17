@@ -41,8 +41,11 @@ class NTScalings {
       const double sValue = point.s[j];
       const double zValue = point.z[j];
 
-      omegaSquare[j] = (sValue / (zValue < epsilon ? epsilon : zValue));
-      omega[j] = std::sqrt(omegaSquare[j]);
+      // Notice negative and abs function to compute omegaSquare and omega
+      // Though omegaSquare is not actually negative semi definite, we need it
+      // as NSD in all our calculations with it
+      omegaSquare[j] = -(sValue / (zValue < epsilon ? epsilon : zValue));
+      omega[j] = std::sqrt(std::abs(omegaSquare[j]));
 
       lambdaSquare[j] = sValue * zValue;
       lambda = std::sqrt(lambdaSquare[j]);

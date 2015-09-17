@@ -11,6 +11,8 @@
 #include "Point.hpp"
 #include "LinearAlgebraUtil.hpp"
 #include "NTScalings.hpp"
+#include "KKTUtil.hpp"
+#include "Residuals.hpp"
 
 namespace lp {
 
@@ -19,29 +21,28 @@ class Solver {
  public:
   Solver(const Problem& problem)
       : _problem(problem),
-        _lSolver(problem),
+        _kktUtil(KKTUtil(_problem)),
+        _lSolver(problem, _kktUtil),
         _logger(spdlog::stdout_logger_mt("Solver")) {}
 
   void solve() {
     _logger->info("Solver started");
 
-    SymmetricMatrix kkt = createInitialKKT();
+    // Initial omegaSquare
+    // Initialize with negative one
+    DenseVector initialOmegaSquare(_problem.inequalityRows, -1);
 
-    Point currentPoint = getInitialPoint(kkt);
+    Point currentPoint = getInitialPoint(initialOmegaSquare);
 
     for (int j = 0; j < 1; ++j) {
       // Compute residuals
       // Check for termination conditions
       const NTScalings scalings(_problem, currentPoint);
 
-      updateKktWithNewScalings(scalings, kkt);
+      _lSolver.factorizeMatrix(scalings.omegaSquare);
 
-      std::cout << "kkt: " << kkt << std::endl;
-
-      _lSolver.factorizeMatrix(scalings);
-
-      DenseVector solution =
-          findSolutionForRhs(kkt, -_problem.c, _problem.b, _problem.h);
+      DenseVector solution = findSolutionForRhs(
+          scalings.omegaSquare, -_problem.c, _problem.b, _problem.h);
 
       std::cout << "First solution " << solution << std::endl;
     }
@@ -51,6 +52,7 @@ class Solver {
 
  private:
   const Problem& _problem;
+  const KKTUtil _kktUtil;
   LinearSolver _lSolver;
   const std::shared_ptr<spdlog::logger> _logger;
 
@@ -58,7 +60,7 @@ class Solver {
    * Update KKT matrix with new NT scalings
    *
    * [d   A'  G']
-   * [A   d   0 ]
+   * [A  -d   0 ]
    * [G   0  -W ]
    *
    * TODO Blaze symmetric matrix and chomod upper triangular matrices are
@@ -79,17 +81,17 @@ class Solver {
   /**
    * Computes initial point from initial KKT matrix
    * [d   A'  G']
-   * [A   d   0 ]
+   * [A  -d   0 ]
    * [G   0  -I ]
    */
-  Point getInitialPoint(const SymmetricMatrix& initialKkt) {
+  Point getInitialPoint(const DenseVector& omegaSquare) {
     // Factorize Quasi PSD matrix
-    _lSolver.factorizeInitialMatrix(initialKkt);
+    _lSolver.factorizeInitialMatrix(omegaSquare);
     // Create empty primal dual point
     Point point(_problem);
 
-    computePrimalInitialPoint(initialKkt, point);
-    computeDualInitialPoint(initialKkt, point);
+    computePrimalInitialPoint(omegaSquare, point);
+    computeDualInitialPoint(omegaSquare, point);
 
     point.tau = 1.0;
     point.kappa = 1.0;
@@ -101,16 +103,15 @@ class Solver {
    * Computes primal point (x, s) from initial KKT matrix
    *
    * [d   A'  G'] [ x ]   [0]
-   * [A   d   0 ] [ y ] = [b]
+   * [A  -d   0 ] [ y ] = [b]
    * [G   0  -I ] [-r ]   [h]
    *
    * s = r                 if r >k 0
    *   = r + (1 + alphaP)e otherwise
    */
-  void computePrimalInitialPoint(const SymmetricMatrix& initialKkt,
-                                 Point& point) {
+  void computePrimalInitialPoint(const DenseVector& omegaSquare, Point& point) {
     DenseVector solution =
-        findSolutionForRhs(initialKkt, 0, _problem.b, _problem.h);
+        findSolutionForRhs(omegaSquare, 0, _problem.b, _problem.h);
 
     // Copy subvectors
     point.x = blaze::subvector(solution, 0UL, _problem.columns);
@@ -125,15 +126,14 @@ class Solver {
    * Computes dual point (y, z) from initial KKT matrix
    *
    * [d   A'  G'] [ x ]   [-c]
-   * [A   d   0 ] [ y ] = [ 0]
+   * [A  -d   0 ] [ y ] = [ 0]
    * [G   0  -I ] [ z']   [ 0]
    *
    * z = z'                 if z' >k 0
    *   = z' + (1 + alphaD)e otherwise
    */
-  void computeDualInitialPoint(const SymmetricMatrix& initialKkt,
-                               Point& point) {
-    DenseVector solution = findSolutionForRhs(initialKkt, -_problem.c, 0, 0);
+  void computeDualInitialPoint(const DenseVector& omegaSquare, Point& point) {
+    DenseVector solution = findSolutionForRhs(omegaSquare, -_problem.c, 0, 0);
 
     // Copy subvectors
     point.y =
@@ -170,19 +170,19 @@ class Solver {
    *improve solution
    */
   template <typename FB, typename SB, typename TB>
-  DenseVector findSolutionForRhs(const SymmetricMatrix& kkt, const FB& fb,
+  DenseVector findSolutionForRhs(const DenseVector& omegaSquare, const FB& fb,
                                  const SB& sb, const TB& tb) {
     DenseVector rhs = createRHS(fb, sb, tb);
 
     DenseVector solution =
-        doIterativeRefinement(kkt, rhs, _lSolver.solveForRhs(rhs));
+        doIterativeRefinement(omegaSquare, rhs, _lSolver.solveForRhs(rhs));
     return solution;
   };
 
   /**
    *  Initial KKT Matrix
    *  [ d   A'  G']
-   *  [ A   d   0 ]
+   *  [ A  -d   0 ]
    *  [ G   0  -I ]
    *
    *  Where d is static delta added along the diagonal to matrix to make quasi
@@ -266,21 +266,28 @@ class Solver {
 
   /**
    * Iterative refinement
+   * omegaSquare is only variable part, all other blocks in KKT matrix are
+   *constant
+   * omegaSquare is NSD
+   *  [ d   A'  G'  ]
+   *  [ A  -d   0   ]
+   *  [ G   0  -W^2 ]
+   *
    */
-  DenseVector doIterativeRefinement(const SymmetricMatrix& kkt,
+  DenseVector doIterativeRefinement(const DenseVector& omegaSquare,
                                     const DenseVector& rhs,
                                     const DenseVector& solution) {
-    std::cout << "Before IR" << solution << std::endl;
-
+    // TODO Is this right way to represent nan?
     double prevError = std::nan("1");
-    double errorThreshold = (1 + kkt.nonZeros()) * _problem.options.LSAcc;
+    double errorThreshold = (1 + _kktUtil.nnz) * _problem.options.LSAcc;
 
     DenseVector newSolution = solution;
     DenseVector prevSolution;
 
     for (int j = 0; j < _problem.options.IRIterations; ++j) {
-      DenseVector residual = rhs - kkt * newSolution;
-      double errorNorm = normInf(residual);
+      Residuals residuals(_problem, rhs, newSolution, omegaSquare);
+
+      double errorNorm = normInf(residuals.x, residuals.y, residuals.z);
 
       _logger->info("Error norm: {}, during iteration: {}", errorNorm, j);
 
@@ -299,7 +306,9 @@ class Solver {
 
       prevError = errorNorm;
       prevSolution = newSolution;
-      newSolution = newSolution + _lSolver.solveForRhs(residual);
+      newSolution = newSolution +
+                    _lSolver.solveForRhs(
+                        createRHS(residuals.x, residuals.y, residuals.z));
     }
 
     return newSolution;

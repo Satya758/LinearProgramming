@@ -39,7 +39,7 @@ double normInf(const DenseVector& bVec) {
  */
 double normInf(const DenseVector& vec1, const DenseVector& vec2,
                const DenseVector& vec3) {
-  return std::max(std::max(normInf(vec1), normInf(vec2)), normInf(vec3));
+  return std::max({normInf(vec1), normInf(vec2), normInf(vec3)});
 }
 }
 #endif  // LINEARPROGRAMMING_BLAZEUTIL_HPP

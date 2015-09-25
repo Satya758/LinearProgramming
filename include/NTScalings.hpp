@@ -33,24 +33,30 @@ class NTScalings {
         omegaSquare(problem.inequalityRows),
         lambda(problem.inequalityRows),
         lambdaSquare(problem.inequalityRows) {
-    // FIXME Move to options if its used elsewhere
-    const double epsilon = 1e-13;
-
     // TODO Do we need epsilon? Does z value can go so small!
     for (size_t j = 0; j < problem.inequalityRows; ++j) {
       const double sValue = point.s[j];
       const double zValue = point.z[j];
 
-      // Notice negative and abs function to compute omegaSquare and omega
-      // Though omegaSquare is not actually negative semi definite, we need it
-      // as NSD in all our calculations with it
-      omegaSquare[j] = -(sValue / (zValue < epsilon ? epsilon : zValue));
+      // Its not -W^2 but W^2
+      omegaSquare[j] =
+          (sValue / (zValue < problem.options.epsilon ? problem.options.epsilon
+                                                      : zValue));
       omega[j] = std::sqrt(std::abs(omegaSquare[j]));
 
       lambdaSquare[j] = sValue * zValue;
       lambda = std::sqrt(lambdaSquare[j]);
     }
   }
+
+  /**
+   * Intial scalings, lambda, lambdaSqaure are not used
+   */
+  NTScalings(const Problem& problem)
+      : omega(problem.inequalityRows, 1),
+        omegaSquare(problem.inequalityRows, 1),
+        lambda(0),
+        lambdaSquare(0) {}
 
   DenseVector omega;
   DenseVector omegaSquare;

@@ -32,11 +32,7 @@ class Solver {
     const double ryNorm = std::max(1.0, blaze::length(_problem.b));
     const double rzNorm = std::max(1.0, blaze::length(_problem.h));
 
-    // Initial omegaSquare
-    // Initialize with negative one
-    DenseVector initialOmegaSquare(_problem.inequalityRows, -1);
-
-    Point currentPoint = getInitialPoint(initialOmegaSquare);
+    Point currentPoint = getInitialPoint();
 
     for (int j = 0; j < 1; ++j) {
       const Residuals residuals(_problem, currentPoint, rxNorm, ryNorm, rzNorm);
@@ -44,7 +40,7 @@ class Solver {
       // Check for termination conditions
       const NTScalings scalings(_problem, currentPoint);
 
-      _lSolver.factorizeMatrix(scalings.omegaSquare);
+      _lSolver.factorizeMatrix(scalings);
 
       DenseVector ds1 = findSolutionForRhs(scalings.omegaSquare, -_problem.c,
                                            _problem.b, _problem.h);
@@ -61,7 +57,7 @@ class Solver {
       Point affinePoint = getAffineDirection(currentPoint, residuals, scalings,
                                              splitDs1, tauDenominator);
 
-      std::cout << affinePoint << std::endl;
+      //      std::cout << affinePoint << std::endl;
     }
 
     _logger->info("Solver ended");
@@ -79,14 +75,15 @@ class Solver {
    * [A  -d   0 ]
    * [G   0  -I ]
    */
-  Point getInitialPoint(const DenseVector& omegaSquare) {
+  Point getInitialPoint() {
+    const NTScalings initialScalings(_problem);
     // Factorize Quasi PSD matrix
-    _lSolver.factorizeInitialMatrix(omegaSquare);
+    _lSolver.factorizeInitialMatrix(initialScalings);
     // Create empty primal dual point
     Point point(_problem);
 
-    computePrimalInitialPoint(omegaSquare, point);
-    computeDualInitialPoint(omegaSquare, point);
+    computePrimalInitialPoint(initialScalings.omegaSquare, point);
+    computeDualInitialPoint(initialScalings.omegaSquare, point);
 
     point.tau = 1.0;
     point.kappa = 1.0;
@@ -208,6 +205,9 @@ class Solver {
    *  [ A  -d   0   ]
    *  [ G   0  -W^2 ]
    *
+   * TODO Commented prevSolution copy to improve speed, as this is a rare case,
+   *better calculate rather than copy which I am doing here, In future calculate
+   *prevSolution, for now throw exception
    */
   DenseVector doIterativeRefinement(const DenseVector& omegaSquare,
                                     const DenseVector& rhs,
@@ -217,7 +217,7 @@ class Solver {
     double errorThreshold = (1 + _kktUtil.nnz) * _problem.options.LSAcc;
 
     DenseVector newSolution = solution;
-    DenseVector prevSolution;
+    //    DenseVector prevSolution;
 
     for (int j = 0; j < _problem.options.IRIterations; ++j) {
       const ResidualsKkt residuals(_problem, rhs, newSolution, omegaSquare);
@@ -232,7 +232,8 @@ class Solver {
             "As Error norm is: {}, during iteration: {}, returning previous "
             "solution",
             errorNorm, j);
-        return prevSolution;
+        //        return prevSolution;
+        throw new std::invalid_argument("Iterative refinement failed");
       }
 
       if (errorNorm < errorThreshold ||
@@ -241,7 +242,7 @@ class Solver {
       }
 
       prevError = errorNorm;
-      prevSolution = newSolution;
+      //      prevSolution = newSolution;
       newSolution = newSolution +
                     _lSolver.solveForRhs(createRHS(
                         residuals.kktX, residuals.kktY, residuals.kktZ));
@@ -250,6 +251,9 @@ class Solver {
     return newSolution;
   }
 
+  /**
+   *
+   */
   Point getAffineDirection(const Point& currentPoint,
                            const Residuals& residuals,
                            const NTScalings& scalings, const SplitVector& ds1,

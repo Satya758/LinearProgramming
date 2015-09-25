@@ -27,21 +27,18 @@ class CholeskyLDLTSolver {
    * Uses CHOLMOD, incremental factorization
    */
   CholeskyLDLTSolver(const Problem& problem, const KKTUtil& kktUtil)
-      : _problem(problem), _kktUtil(kktUtil) {
+      : _problem(problem),
+        _kktUtil(kktUtil),
+        _logger(spdlog::stdout_logger_mt("Cholmod")) {
     cholmod_l_start(&c);
 
     // TODO For now its just AMD, have to try out metis and others as we have
     // Sparse G (Special) Lets use latest metis and define custom permutation in
     // cholmod
+    // FIXME Add support for more permutation options
     c.nmethods = 1;
-    // As we are using incremental factorization, permutation of original matrix
-    // alters actual matrix that is factorized, so we have to ignore ordering
-    // methods, TODO Unless there is a way to partial order without disturbing
-    // 3X3 block, its either reduce filling ordering or incremental
-    // factorization
-    c.method[0].ordering = CHOLMOD_NATURAL;
-    c.postorder = false;
-    // c.method[0].ordering = CHOLMOD_AMD;
+    c.postorder = true;
+    c.method[0].ordering = CHOLMOD_AMD;
 
     c.itype = CHOLMOD_LONG;
     c.dtype = CHOLMOD_DOUBLE;
@@ -51,67 +48,71 @@ class CholeskyLDLTSolver {
 
     // TODO Remove after testing
     // Print warning messages
-    c.print = 3;
+    c.print = 5;
+
+    c.maxrank = 16;
   }
 
   ~CholeskyLDLTSolver() {
     cholmod_l_free_sparse(&_A, &c);
+
+    cholmod_l_free_factor(&_IL, &c);
     cholmod_l_free_factor(&_L, &c);
-    cholmod_l_free_factor(&_PL, &c);
 
     cholmod_l_finish(&c);
   }
 
   /**
    * As this is first time this is complete factorization with symbolic analysis
+   * First factorize following matrix
+   * [d   A'  G']
+   * [A  -d   0 ]
+   * [G   0  -d ]
+   *
+   * and then using rank-k updates procedure update factor in this case
+   * [d   A'  G']
+   * [A  -d   0 ]
+   * [G   0  -I ]
    */
-  void factorizeInitialMatrix(const DenseVector& omegaSquare) {
+  void factorizeInitialMatrix(const NTScalings& scalings) {
     // A is symmetric matrix, 6th parameter indicates that A is symmetric
     _A = cholmod_l_allocate_sparse(_kktUtil.size, _kktUtil.size, _kktUtil.utNnz,
                                    true, true, 1, CHOLMOD_REAL, &c);
 
-    createInitialKktUtCcsMatrix(
-        omegaSquare, static_cast<SuiteSparse_long*>(_A->p),
-        static_cast<SuiteSparse_long*>(_A->i), static_cast<double*>(_A->x));
+    createInitialKktUtCcsMatrix(static_cast<SuiteSparse_long*>(_A->p),
+                                static_cast<SuiteSparse_long*>(_A->i),
+                                static_cast<double*>(_A->x));
 
     // TODO Check if created matrix is good, remove it later after testing
-    cholmod_l_print_sparse(_A, "A", &c);
+//    cholmod_l_print_sparse(_A, "A", &c);
 
     // Symbolic analysis
-    _PL = cholmod_l_analyze(_A, &c);
-    _PL->is_ll = false;
-    _PL->is_super = false;
+    _IL = cholmod_l_analyze(_A, &c);
+    _IL->is_ll = false;
+    _IL->is_super = false;
 
-    factorize(0, _problem.columns + _problem.equalityRows, _PL);
+    _logger->info("First complete factorization started");
+    cholmod_l_factorize(_A, _IL, &c);
+    _logger->info("First complete factorization Ended");
 
-    // Clean old factor before creating new one
-    //    cholmod_l_free_factor(&_L, &c);
-    // FIXME Instead of copying we can clean _PL to be used for subsequent
-    // factorizations
-    // TODO Meanwhile move to method
-    _L = cholmod_l_copy_factor(_PL, &c);
-    factorize(_problem.columns + _problem.equalityRows, _A->nrow, _L);
+    // TODO Remove
+    //    cholmod_l_print_factor(_IL, "IL: ", &c);
 
-    cholmod_l_print_factor(_PL, "PL: ", &c);
-    cholmod_l_print_factor(_L, "L: ", &c);
+    updateFactor(scalings.omega);
   }
 
   /**
    * Incremental factorization
    */
-  void factorizeMatrix(const DenseVector& omegaSquare) {
-    updateKktUtCcs3X3Block(omegaSquare, static_cast<SuiteSparse_long*>(_A->p),
-                           static_cast<SuiteSparse_long*>(_A->i),
-                           static_cast<double*>(_A->x));
-
-    // Clean old factor before creating new one
-    cholmod_l_free_factor(&_L, &c);
-    _L = cholmod_l_copy_factor(_PL, &c);
-    // After first factor only 3X3 diagonal block is changed so we can do
-    // incremental factorization
-    factorize(_problem.columns + _problem.equalityRows, _A->nrow, _L);
+  void factorizeMatrix(const NTScalings& scalings) {
+    updateFactor(scalings.omega);
+    // TODO
+    //    cholmod_l_print_factor(_L, "Second wave: ", &c);
   }
 
+  /**
+   * Solve for Rhs
+   */
   DenseVector solveForRhs(const DenseVector& rhs) {
     auto cholmod_del = [&](cholmod_dense* d) {
       // As owner of value pointers is transferred to Blaze, its responsibility
@@ -145,23 +146,19 @@ class CholeskyLDLTSolver {
   // not incompatible with cholmod
   cholmod_sparse* _A;
 
-  cholmod_factor* _L;
-  cholmod_factor* _PL;  // Partial factor
+  // Initial factor
+  cholmod_factor* _IL;
+  cholmod_factor* _L = nullptr;
 
   cholmod_common c;
 
-  /**
-   * FIXME use beta[0] instead of adding delta explicitly
-   */
-  void factorize(size_t startingIndex, size_t rows, cholmod_factor* _FL) {
-    double beta[2];
-    beta[0] = 0;
-    beta[1] = 0;
+  const std::shared_ptr<spdlog::logger> _logger;
 
-    // endIndex is not actual index but number of rows, rows - 1 is done inside
-    // to get index, read the doc!!!
-    cholmod_l_rowfac(_A, nullptr, beta, startingIndex, rows, _FL, &c);
-  }
+  std::function<void(cholmod_sparse*)> cholmodSparseDelete =
+      [this](cholmod_sparse* S) { cholmod_l_free_sparse(&S, &this->c); };
+
+  using CholmodSparse =
+      std::unique_ptr<cholmod_sparse, decltype(cholmodSparseDelete)>;
 
   /**
    * Initial KKT Matrix, only upper triangle is filled to create Colum
@@ -169,13 +166,12 @@ class CholeskyLDLTSolver {
    *
    *  [ d   A'  G']
    *  [ A  -d   0 ]
-   *  [ G   0  -I ]
+   *  [ G   0  -d ]
    *
    * CCS arrays are allocated
    */
   template <typename ColumnPointer, typename RowIndex, typename RowValue>
-  void createInitialKktUtCcsMatrix(const DenseVector& omegaSquare,
-                                   ColumnPointer* const cp, RowIndex* const ri,
+  void createInitialKktUtCcsMatrix(ColumnPointer* const cp, RowIndex* const ri,
                                    RowValue* const rv) {
     // Nature of column pointer, always starts with 0 and ends with nnz
     cp[0] = 0;
@@ -228,7 +224,7 @@ class CholeskyLDLTSolver {
 
       // Add diagonal omegaSquare at 3X3 block
       ri[rowIndex] = k + _problem.columns + _problem.equalityRows;
-      rv[rowIndex++] = omegaSquare[k];
+      rv[rowIndex++] = -_problem.options.staticDelta;
 
       ++columnPtr;
 
@@ -237,35 +233,62 @@ class CholeskyLDLTSolver {
   }
 
   /**
-   * As we have only upper triangle stored in CCS format, we are sure that last
-   * element in each column is diagonal element.
-   * So Diagonal element can be accessed by rv[cp[i+1] - 1] of column i and row
-   *i,
-   * this is because of being diagonal element last
-   * Above condition is not true for Second order cones
    *
-   * Only rowValue array is changed
-   * Only 3X3 diagonal block is changed
    *
    */
-  template <typename ColumnPointer, typename RowIndex, typename RowValue>
-  void updateKktUtCcs3X3Block(const DenseVector& omegaSquare,
-                              const ColumnPointer* const cp,
-                              const RowIndex* const ri,
-                              RowValue* const rv) const {
-    size_t colIndex = _problem.columns + _problem.equalityRows;
-    size_t columns =
-        _problem.columns + _problem.equalityRows + _problem.inequalityRows;
+  CholmodSparse createSparseUpdate(const DenseVector& omegaSquare) {
+    // This is rectangular matrix of size _kktUtil.size X
+    // _problem.inequalityRows, and as we are dealing with LP problem, number of
+    // non-zeros are equal to _problem.inequalityRows, this is thin matrix
+    CholmodSparse sparseUpdate(
+        cholmod_l_allocate_sparse(_kktUtil.size, _problem.inequalityRows,
+                                  _problem.inequalityRows, true, true, 0,
+                                  CHOLMOD_REAL, &c),
+        cholmodSparseDelete);
 
-    size_t scalingIndex = 0;
-    // 3X3 block diagonal, scalings matrix
-    for (size_t j = colIndex; j < columns; ++j) {
-      // TODO Ordering is not done in favour of incremental factorization, so
-      // IPerm is not used
-      // j is actual column index and colI is permuted col index
-      // size_t colI = IPerm[j];
-      rv[cp[j + 1] - 1] = omegaSquare[scalingIndex++];
+    SuiteSparse_long* Sp = static_cast<SuiteSparse_long*>(sparseUpdate->p);
+    SuiteSparse_long* Si = static_cast<SuiteSparse_long*>(sparseUpdate->i);
+    double* Sx = static_cast<double*>(sparseUpdate->x);
+
+    size_t rowIndex = _problem.columns + _problem.equalityRows;
+    Sp[0] = 0;
+    for (size_t j = 0; j < sparseUpdate->ncol; ++j) {
+      Sp[j + 1] = j + 1;
+      Si[j] = rowIndex++;
+      Sx[j] = omegaSquare[j];
     }
+    // TODO
+    //    cholmod_l_print_sparse(sparseUpdate.get(), "SU", &c);
+    // Permute SparseUpdate
+    CholmodSparse permutedSparseUpdate(
+        cholmod_l_submatrix(sparseUpdate.get(),
+                            static_cast<SuiteSparse_long*>(_L->Perm), _L->n,
+                            nullptr, -1, true, true, &c),
+        cholmodSparseDelete);
+
+    return permutedSparseUpdate;
+  }
+
+  /**
+   * Updates factor with rank-k update
+   */
+  void updateFactor(const DenseVector& omega) {
+    _logger->info("Creation of duplicate copy started");
+    // free _L before creating new one
+    if (_L != nullptr) {
+      cholmod_l_free_factor(&_L, &c);
+    }
+    _L = cholmod_l_copy_factor(_IL, &c);
+    _logger->info("Creation of duplicate copy ended");
+
+    _logger->info("Sparse update creation started");
+    CholmodSparse sparseUpdate = createSparseUpdate(omega);
+    _logger->info("Sparse update creation ended");
+
+    _logger->info("factor update creation started");
+    // Its downdate as omegaSquare is negative
+    cholmod_l_updown(false, sparseUpdate.get(), _L, &c);
+    _logger->info("factor update creation ended");
   }
 
   /**

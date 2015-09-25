@@ -56,13 +56,13 @@ class Residuals {
     double v2 = blaze::length(_subRy - _problem.b) / _ryNorm;
     double v3 = blaze::length(_subRz - _problem.h) / _rzNorm;
 
-    return std::max(std::max(v1, v2), v3);
+    return std::max({v1, v2, v3});
   }
 
   double getAbsoluteValue() { return blaze::trans(_point.s) * _point.z; }
 
   double getRelativeValue() {
-    double denominator = std::max(std::max(-_cTx, -_bTy), -_hTz);
+    double denominator = std::max({-_cTx, -_bTy, -_hTz});
 
     return absolute / denominator;
   }
@@ -102,6 +102,7 @@ class Residuals {
         absolute(getAbsoluteValue()),
         relative(getRelativeValue()) {}
 };
+
 /**
  * x, y, z are firstBlock, secondBlock and z thirdBlock respectively
  * Computes KKT residuals
@@ -156,7 +157,7 @@ class ResidualsKkt {
   DenseVector getKktRz() const {
     DenseVector rZ;
 
-    rZ = _svRhs.z - _problem.G * _svSol.x - _omegaSquare * _svSol.z;
+    rZ = _svRhs.z - _problem.G * _svSol.x + _omegaSquare * _svSol.z;
 
     return rZ;
   }

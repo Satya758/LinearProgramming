@@ -84,7 +84,7 @@ class CholeskyLDLTSolver {
                                 static_cast<double*>(_A->x));
 
     // TODO Check if created matrix is good, remove it later after testing
-//    cholmod_l_print_sparse(_A, "A", &c);
+    //    cholmod_l_print_sparse(_A, "A", &c);
 
     // Symbolic analysis
     _IL = cholmod_l_analyze(_A, &c);
@@ -99,6 +99,9 @@ class CholeskyLDLTSolver {
     //    cholmod_l_print_factor(_IL, "IL: ", &c);
 
     updateFactor(scalings.omega);
+    _logger->info("Compute U Started");
+    computeU(scalings.omega);
+    _logger->info("Compute U Ended");
   }
 
   /**
@@ -289,6 +292,53 @@ class CholeskyLDLTSolver {
     // Its downdate as omegaSquare is negative
     cholmod_l_updown(false, sparseUpdate.get(), _L, &c);
     _logger->info("factor update creation ended");
+  }
+
+  /**
+   * In QU = R, compute U by repeated solves for each column in R, in this case
+   * R = -W
+   */
+  void computeU(const DenseVector& omega) {
+    cholmod_dense* x = nullptr;
+    cholmod_dense* y = nullptr;
+    cholmod_dense* e = nullptr;
+
+    // Allocated only once, cleared every time in a loop for next use
+    cholmod_dense* rhs = cholmod_l_zeros(_kktUtil.size, 1, CHOLMOD_REAL, &c);
+
+    size_t rowIndex = _problem.columns + _problem.equalityRows;
+
+    // Output pattern
+    CholmodSparse Xset(nullptr, cholmodSparseDelete);
+
+    // Instead of allocating every time, rewrite the values as there is only one
+    // value
+    CholmodSparse R(cholmod_l_allocate_sparse(_kktUtil.size, 1, 1, true, true,
+                                              0, CHOLMOD_REAL, &c),
+                    cholmodSparseDelete);
+    // Just pattern is needed for R, values are ignored
+    static_cast<SuiteSparse_long*>(R->p)[0] = 0;
+    static_cast<SuiteSparse_long*>(R->p)[1] = 1;
+
+    for (size_t j = 0; j < _problem.inequalityRows; ++j) {
+      // Pattern information
+      static_cast<SuiteSparse_long*>(R->i)[0] = rowIndex;
+      // Actual value in dense vector
+      static_cast<double*>(rhs->x)[rowIndex] = -omega[j];
+
+      cholmod_sparse* XsetT = Xset.get();
+      cholmod_l_solve2(CHOLMOD_A, _IL, rhs, R.get(), &x, &XsetT, &y, &e, &c);
+
+      // Finally clear the added element in dense, to reuse same allocation in
+      // next loop and increment rowIndex
+      static_cast<double*>(rhs->x)[rowIndex++] = 0;
+    }
+
+    cholmod_l_free_dense(&rhs, &c);
+
+    cholmod_l_free_dense(&x, &c);
+    cholmod_l_free_dense(&y, &c);
+    cholmod_l_free_dense(&e, &c);
   }
 
   /**

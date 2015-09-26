@@ -6,6 +6,7 @@
 #define CHOLESKYLDLTSOLVER_HPP
 
 #include <cholmod.h>
+#include <amd.h>
 
 #include "Problem.hpp"
 #include "NTScalings.hpp"
@@ -49,8 +50,6 @@ class CholeskyLDLTSolver {
     // TODO Remove after testing
     // Print warning messages
     c.print = 5;
-
-    c.maxrank = 16;
   }
 
   ~CholeskyLDLTSolver() {
@@ -83,8 +82,11 @@ class CholeskyLDLTSolver {
                                 static_cast<SuiteSparse_long*>(_A->i),
                                 static_cast<double*>(_A->x));
 
+    computePermutation(_A);
+
     // TODO Check if created matrix is good, remove it later after testing
     //    cholmod_l_print_sparse(_A, "A", &c);
+
 
     // Symbolic analysis
     _IL = cholmod_l_analyze(_A, &c);
@@ -158,7 +160,7 @@ class CholeskyLDLTSolver {
   const std::shared_ptr<spdlog::logger> _logger;
 
   std::function<void(cholmod_sparse*)> cholmodSparseDelete =
-      [this](cholmod_sparse* S) { cholmod_l_free_sparse(&S, &this->c); };
+      [this](cholmod_sparse* S) { cholmod_l_free_sparse(&S, &(this->c)); };
 
   using CholmodSparse =
       std::unique_ptr<cholmod_sparse, decltype(cholmodSparseDelete)>;
@@ -339,6 +341,86 @@ class CholeskyLDLTSolver {
     cholmod_l_free_dense(&x, &c);
     cholmod_l_free_dense(&y, &c);
     cholmod_l_free_dense(&e, &c);
+  }
+
+  /**
+   * Computes partial permutations and combines them
+   */
+  void computePermutation(cholmod_sparse* A) {
+    // First 2X2 block
+    size_t faSize = _problem.columns + _problem.equalityRows;
+
+//    CholmodSparse FA(
+//        cholmod_l_allocate_sparse(faSize, faSize,
+//                                  _problem.columns + _problem.A.nonZeros(),
+//                                  true, true, 1, CHOLMOD_REAL, &c),
+//        cholmodSparseDelete);
+//
+//    // Whole matrix without 2X2 block, we call it Second A
+//    CholmodSparse SA(
+//        cholmod_l_allocate_sparse(_kktUtil.size, _kktUtil.size,
+//                                  _problem.inequalityRows + _problem.G.nonZeros(),
+//                                  true, true, 1, CHOLMOD_REAL, &c),
+//        cholmodSparseDelete);
+
+    cholmod_sparse* FA = cholmod_l_allocate_sparse(faSize, faSize,
+                                  _problem.columns + _problem.equalityRows + _problem.A.nonZeros(),
+                                  true, true, 1, CHOLMOD_REAL, &c);
+
+    cholmod_sparse* SA = cholmod_l_allocate_sparse(_kktUtil.size, _kktUtil.size,
+                                  _problem.inequalityRows + _problem.G.nonZeros(),
+                                  true, true, 1, CHOLMOD_REAL, &c);
+
+    SuiteSparse_long* Ap = static_cast<SuiteSparse_long*>(A->p);
+    SuiteSparse_long* Ai = static_cast<SuiteSparse_long*>(A->i);
+
+    SuiteSparse_long* FAp = static_cast<SuiteSparse_long*>(FA->p);
+    SuiteSparse_long* FAi = static_cast<SuiteSparse_long*>(FA->i);
+
+    // TODO We can use std::copy
+    for (size_t j = 0; j <= faSize; ++j) {
+      FAp[j] = Ap[j];
+    }
+
+    for (size_t j = 0; j < FAp[faSize]; ++j) {
+      FAi[j] = Ai[j];
+    }
+
+    SuiteSparse_long* SAp = static_cast<SuiteSparse_long*>(SA->p);
+    SuiteSparse_long* SAi = static_cast<SuiteSparse_long*>(SA->i);
+
+    for (size_t k = 0; k <= faSize ; ++k) {
+      SAp[k] = 0;
+    }
+
+    for (size_t l = faSize + 1; l <= _kktUtil.size; ++l) {
+     SAp[l] = Ap[l] - Ap[faSize];
+    }
+
+    size_t i = 0;
+    for (size_t k = Ap[faSize]; k < Ap[_kktUtil.size]; ++k) {
+      SAi[i] = Ai[k];
+      i++;
+    }
+
+//    cholmod_l_print_sparse(A, "A", &c);
+//    cholmod_l_print_sparse(FA.get(), "FA", &c);
+//    cholmod_l_print_sparse(SA.get(), "SA", &c);
+
+    _logger->info("Permuation strted 1");
+    auto faPerm = std::make_unique<SuiteSparse_long[]>(FA->ncol);
+    amd_l_order(FA->ncol, FAp, FAi, faPerm.get(), nullptr, nullptr);
+
+    auto saPerm = std::make_unique<SuiteSparse_long[]>(SA->ncol);
+    amd_l_order(SA->ncol, SAp, SAi, saPerm.get(), nullptr, nullptr);
+
+    _logger->info("Permuation ended all");
+
+    for (size_t m = 0; m < SA->ncol; ++m) {
+      std::cout << saPerm[m] << std::endl;
+    }
+    cholmod_l_free_sparse(&FA, &c);
+    cholmod_l_free_sparse(&SA, &c);
   }
 
   /**

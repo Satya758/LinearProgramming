@@ -157,7 +157,7 @@ class ResidualsKkt {
   DenseVector getKktRz() const {
     DenseVector rZ;
 
-    rZ = _svRhs.z - _problem.G * _svSol.x + _omegaSquare * _svSol.z;
+    rZ = _svRhs.z - _problem.G * _svSol.x - _omegaSquare * _svSol.z;
 
     return rZ;
   }

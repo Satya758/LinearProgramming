@@ -212,6 +212,9 @@ class Solver {
   DenseVector doIterativeRefinement(const DenseVector& omegaSquare,
                                     const DenseVector& rhs,
                                     const DenseVector& solution) {
+    if (!_problem.options.solverIR) {
+      return solution;
+    }
     // TODO Is this right way to represent nan?
     double prevError = std::nan("1");
     double errorThreshold = (1 + _kktUtil.nnz) * _problem.options.LSAcc;

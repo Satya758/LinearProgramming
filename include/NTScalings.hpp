@@ -38,10 +38,10 @@ class NTScalings {
       const double sValue = point.s[j];
       const double zValue = point.z[j];
 
-      // Its not -W^2 but W^2
+      // Its not W^2 but -W^2
       omegaSquare[j] =
-          (sValue / (zValue < problem.options.epsilon ? problem.options.epsilon
-                                                      : zValue));
+          -(sValue / (zValue < problem.options.epsilon ? problem.options.epsilon
+                                                       : zValue));
       omega[j] = std::sqrt(std::abs(omegaSquare[j]));
 
       lambdaSquare[j] = sValue * zValue;
@@ -51,10 +51,12 @@ class NTScalings {
 
   /**
    * Intial scalings, lambda, lambdaSqaure are not used
+   *
+   * Negative is added to omegaSquare W^2
    */
   NTScalings(const Problem& problem)
       : omega(problem.inequalityRows, 1),
-        omegaSquare(problem.inequalityRows, 1),
+        omegaSquare(problem.inequalityRows, -1),
         lambda(0),
         lambdaSquare(0) {}
 

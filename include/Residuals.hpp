@@ -77,6 +77,8 @@ class Residuals {
   // kappa + c'*x + b'*y + h'*z
   const double rTau;
 
+  const double gap;
+
   const double feasable;
   const double absolute;
   const double relative;
@@ -98,6 +100,7 @@ class Residuals {
         ry(_subRy - _problem.b * _point.tau),
         rz(_subRz - _problem.h * _point.tau),
         rTau(getRTau()),
+        gap(blaze::trans(point.s) * point.z),
         feasable(getFeasableValue()),
         absolute(getAbsoluteValue()),
         relative(getRelativeValue()) {}

@@ -34,10 +34,10 @@ class Solver {
 
     Point currentPoint = getInitialPoint();
 
-    for (int j = 0; j < 1; ++j) {
+    for (int j = 0; j < _problem.options.maximumIterations; ++j) {
       const Residuals residuals(_problem, currentPoint, rxNorm, ryNorm, rzNorm);
-      // Compute residuals
       // Check for termination conditions
+
       const NTScalings scalings(_problem, currentPoint);
 
       _lSolver.factorizeMatrix(scalings);
@@ -57,7 +57,20 @@ class Solver {
       Point affinePoint = getAffineDirection(currentPoint, residuals, scalings,
                                              splitDs1, tauDenominator);
 
-      //      std::cout << affinePoint << std::endl;
+      Point combinedPoint =
+          getCombinedDirection(currentPoint, affinePoint, residuals, scalings,
+                               splitDs1, tauDenominator);
+
+      double alpha =
+          computeAlpha(currentPoint, combinedPoint) * _problem.options.gamma;
+
+      // Update point
+      currentPoint.x = currentPoint.x + alpha * combinedPoint.x;
+      currentPoint.y = currentPoint.y + alpha * combinedPoint.y;
+      currentPoint.z = currentPoint.z + alpha * combinedPoint.z;
+      currentPoint.s = currentPoint.s + alpha * combinedPoint.s;
+      currentPoint.tau = currentPoint.tau + alpha * combinedPoint.tau;
+      currentPoint.kappa = currentPoint.kappa + alpha * combinedPoint.kappa;
     }
 
     _logger->info("Solver ended");
@@ -255,38 +268,154 @@ class Solver {
   }
 
   /**
-   *
+   * FIXME Code can be improved for both affine and combined methods
    */
   Point getAffineDirection(const Point& currentPoint,
                            const Residuals& residuals,
                            const NTScalings& scalings, const SplitVector& ds1,
                            const double& tauDenominator) {
-    DenseVector ds2 =
+    DenseVector wholeDs2 =
         findSolutionForRhs(scalings.omegaSquare, residuals.rx, residuals.ry,
                            -residuals.rz + currentPoint.s);
 
-    SplitVector splitDs2(_problem, ds2);
+    SplitVector ds2(_problem, wholeDs2);
 
     Point affinePoint(_problem);
 
-    affinePoint.tau = (residuals.rTau - currentPoint.kappa +
-                       blaze::trans(_problem.c) * splitDs2.x +
-                       blaze::trans(_problem.b) * splitDs2.y +
-                       blaze::trans(_problem.h) * splitDs2.z) /
-                      tauDenominator;
+    affinePoint.tau =
+        (residuals.rTau - currentPoint.kappa +
+         blaze::trans(_problem.c) * ds2.x + blaze::trans(_problem.b) * ds2.y +
+         blaze::trans(_problem.h) * ds2.z) /
+        tauDenominator;
 
-    affinePoint.x = ds1.x + affinePoint.tau * splitDs2.x;
-    affinePoint.y = ds1.y + affinePoint.tau * splitDs2.y;
-    affinePoint.z = ds1.z + affinePoint.tau * splitDs2.z;
+    affinePoint.x = ds2.x + affinePoint.tau * ds1.x;
+    affinePoint.y = ds2.y + affinePoint.tau * ds1.y;
+    affinePoint.z = ds2.z + affinePoint.tau * ds1.z;
 
     // deltaS = -W(lambda\ lambda o lambda + W*deletaZ )
     // -W^2 as we have added negative in scalings computation
-    affinePoint.s = currentPoint.s - scalings.omegaSquare * affinePoint.z;
+    affinePoint.s = -currentPoint.s + scalings.omegaSquare * affinePoint.z;
 
     affinePoint.kappa =
         -currentPoint.kappa * (1 + affinePoint.tau / currentPoint.tau);
 
     return affinePoint;
+  }
+
+  /**
+   * Only for LP cone
+   */
+  Point getCombinedDirection(const Point& currentPoint,
+                             const Point& affinePoint,
+                             const Residuals& residuals,
+                             const NTScalings& scalings, const SplitVector& ds1,
+                             const double& tauDenominator) {
+    double sigma = computeSigma(computeAlpha(currentPoint, affinePoint));
+    double oneMinusSigma = 1 - sigma;
+    // (s' * z + kappa * tau) / D + 1
+    double mu = (residuals.gap + (currentPoint.kappa * currentPoint.tau)) /
+                (_problem.inequalityRows + 1);
+
+    // Find RHS for combined direction
+    DenseVector rx = oneMinusSigma * residuals.rx;
+    DenseVector ry = oneMinusSigma * residuals.ry;
+    // lambda o lambda + (W^-1 * delataSa) o (W * delataZa) - sigma * mu * e;
+    DenseVector rs(affinePoint.s.size());
+    for (size_t j = 0; j < rs.size(); ++j) {
+      rs[j] = scalings.lambdaSquare[j] + (affinePoint.s[j] * affinePoint.z[j]) -
+              (sigma * mu);
+    }
+
+    // -(1 - sigma)*rz + W(lambda \ ds)
+    // Negative sign as W^2 has minus in scalings
+    DenseVector rz(residuals.rz);
+    for (size_t j = 0; j < rz.size(); ++j) {
+      rz[j] = -oneMinusSigma * residuals.rz[j] + (rs[j] / currentPoint.z[j]);
+    }
+
+    // Get solution for RHS
+    DenseVector wholeDs3 = findSolutionForRhs(scalings.omegaSquare, rx, ry, rz);
+
+    SplitVector ds3(_problem, wholeDs3);
+
+    Point combinedPoint(_problem);
+
+    double rKappa = currentPoint.tau * currentPoint.kappa +
+                    affinePoint.tau * affinePoint.kappa - sigma * mu;
+    combinedPoint.tau =
+        (oneMinusSigma * residuals.rTau - (rKappa / currentPoint.tau) +
+         blaze::trans(_problem.c) * ds3.x + blaze::trans(_problem.b) * ds3.y +
+         blaze::trans(_problem.h) * ds3.z) /
+        tauDenominator;
+
+    combinedPoint.x = ds3.x + combinedPoint.tau * ds1.x;
+    combinedPoint.y = ds3.y + combinedPoint.tau * ds1.y;
+    combinedPoint.z = ds3.z + combinedPoint.tau * ds1.z;
+
+    // -W(lambda \ bs + W*delataZc)
+    // Only for LP cone
+    // Aware of sign in front of W^2
+    for (size_t k = 0; k < rs.size(); ++k) {
+      combinedPoint.s[k] = -rs[k] / currentPoint.z[k] +
+                           scalings.omegaSquare[k] * combinedPoint.z[k];
+    }
+
+    combinedPoint.kappa =
+        -(rKappa + currentPoint.kappa * combinedPoint.tau) / currentPoint.tau;
+
+    return combinedPoint;
+  }
+
+  /**
+   * line search only for positive orthant
+   */
+  double computeAlpha(const Point& currentPoint, const Point& searchDirection) {
+    double rhoMin = searchDirection.s[0] / currentPoint.s[0];
+    double sigmaMin = searchDirection.z[0] / currentPoint.z[0];
+    double alpha;
+
+    for (size_t j = 1; j < searchDirection.s.size(); ++j) {
+      double rho = searchDirection.s[j] / currentPoint.s[j];
+      double sigma = searchDirection.z[j] / currentPoint.z[j];
+
+      if (rho < rhoMin) rhoMin = rho;
+
+      if (sigma < sigmaMin) sigmaMin = sigma;
+    }
+
+    if (sigmaMin < rhoMin) {
+      alpha = sigmaMin < 0 ? 1.0 / (-sigmaMin) : 1.0 / _problem.options.epsilon;
+    } else {
+      alpha = rhoMin < 0 ? 1.0 / (-rhoMin) : 1.0 / _problem.options.epsilon;
+    }
+
+    double tauBySearchTau = -currentPoint.tau / searchDirection.tau;
+    double kappaBySearchKappa = -currentPoint.kappa / searchDirection.kappa;
+
+    if (tauBySearchTau > 0 && tauBySearchTau < alpha) {
+      alpha = tauBySearchTau;
+    }
+    if (kappaBySearchKappa > 0 && kappaBySearchKappa < alpha) {
+      alpha = kappaBySearchKappa;
+    }
+
+    if (alpha > _problem.options.stepMax) alpha = _problem.options.stepMax;
+
+    if (alpha < _problem.options.stepMin) alpha = _problem.options.stepMin;
+
+    return alpha;
+  }
+
+  /**
+   *
+   */
+  double computeSigma(double alpha) {
+    double sigma = std::pow(1 - alpha, 3);
+
+    if (sigma > _problem.options.sigmaMax) sigma = _problem.options.sigmaMax;
+    if (sigma < _problem.options.sigmaMin) sigma = _problem.options.sigmaMin;
+
+    return sigma;
   }
 };
 

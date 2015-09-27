@@ -45,7 +45,7 @@ class NTScalings {
       omega[j] = std::sqrt(std::abs(omegaSquare[j]));
 
       lambdaSquare[j] = sValue * zValue;
-      lambda = std::sqrt(lambdaSquare[j]);
+      lambda[j] = std::sqrt(lambdaSquare[j]);
     }
   }
 

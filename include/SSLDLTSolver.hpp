@@ -6,7 +6,6 @@
 #define CHOLESKYLDLTSOLVER_HPP
 
 #include <cholmod.h>
-#include <amd.h>
 
 #include "Problem.hpp"
 #include "NTScalings.hpp"
@@ -81,7 +80,7 @@ class CholeskyLDLTSolver {
     _L->is_ll = false;
     _L->is_super = false;
 
-    factorize(true);
+    cholmod_l_factorize(_A, _L, &c);
   }
 
   /**
@@ -92,7 +91,7 @@ class CholeskyLDLTSolver {
                            static_cast<SuiteSparse_long*>(_A->i),
                            static_cast<double*>(_A->x));
 
-    factorize(false);
+    cholmod_l_factorize(_A, _L, &c);
   }
 
   /**
@@ -223,7 +222,8 @@ class CholeskyLDLTSolver {
    * So Diagonal element can be accessed by rv[cp[i+1] - 1] of column i and row
    *i,
    * this is because of being diagonal element last
-   * Above condition is not true for Second order cones (as its not just diagonal
+   * Above condition is not true for Second order cones (as its not just
+   *diagonal
    *change)
    *
    * Only rowValue array is changed
@@ -242,45 +242,6 @@ class CholeskyLDLTSolver {
     for (size_t j = colIndex; j < _kktUtil.size; ++j) {
       rv[cp[j + 1] - 1] = scalings.omegaSquare[scalingIndex++];
     }
-  }
-
-  /**
-   * FIXME use beta[0] instead of adding delta explicitly
-   */
-  void factorize(bool permute) {
-    _logger->info("Factorization started");
-    if (permute) {
-      permuteMatrix();
-    }
-
-    double beta[2];
-    beta[0] = 0;
-    beta[1] = 0;
-
-    cholmod_l_rowfac(_A, nullptr, beta, 0, _A->nrow, _L, &c);
-    _logger->info("Factorization ended");
-  }
-
-  /**
-   * Called only once during initial factorization, later factorizations use
-   * permuted matrix to factorize
-   */
-  void permuteMatrix() {
-    // Temporary holder
-    // though stype is of no use for B matrix, given as input in this case to
-    // make intention more clear
-    cholmod_sparse* B = cholmod_l_allocate_sparse(
-        _A->nrow, _A->ncol, _A->nzmax, true, true, -1, CHOLMOD_REAL, &c);
-    // 1 in second parameter means normal array transpose (look into cholmod
-    // doc)
-    cholmod_l_transpose_sym(_A, 1, static_cast<SuiteSparse_long*>(_L->Perm), B,
-                            &c);
-    // transpose again to get upper triangular matrix
-    cholmod_l_transpose_sym(B, 1, nullptr, _A, &c);
-
-    // Free B matrix, we can use unique_ptr with custom deleter, but method is
-    // so small its ok
-    cholmod_l_free_sparse(&B, &c);
   }
 
   /**

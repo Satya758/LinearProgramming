@@ -10,8 +10,8 @@ using namespace std;
  *
  */
 int main(int argc, char **argv) {
-  //  lpp::Parser parser("/home/satya/LPProblems/beer.lp", true);
-  lpp::Parser parser("/home/satya/LPProblems/test/dfl001.lp", true);
+  lpp::Parser parser("/home/satya/LPProblems/beer.lp", true);
+  //  lpp::Parser parser("/home/satya/LPProblems/test/dfl001.lp", true);
   //    lpp::Parser parser("/home/satya/LPProblems/test/25fv47.lp", true);
 
   lpp::Problem parserProblem = parser.getBlazeProblem();
